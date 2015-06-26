@@ -1,4 +1,4 @@
-#!/bin/bash -e
+#!/bin/bash -e -x
 
 ## If you want to reuse this script elsewhere, you probably want to
 ## copy all variables defined in `defaults.sh` here
@@ -29,15 +29,20 @@ for i in '1' '2' '3'; do
 
   ## This environment variable is respected by Weave,
   ## hence it needs to be exported
-  export DOCKER_CLIENT_ARGS="$($DOCKER_MACHINE config)"
+  export DOCKER_CLIENT_ARGS="$($DOCKER_MACHINE config ${MACHINE_NAME_PREFIX}-${i})"
+  eval $($DOCKER_MACHINE env ${MACHINE_NAME_PREFIX}-${i})
 
   ## We are going to use IPAM, hence we launch it with
   ## the following arguments
-  $WEAVE launch -iprange 10.2.3.0/24 -initpeercount 3
+  $WEAVE launch -iprange 10.254.255.0/24 -initpeercount 3
   ## WeaveDNS also needs to be launched
-  $WEAVE launch-dns "10.9.1.${i}/24" -debug
+  $WEAVE launch-dns "10.255.1.${i}/24" -debug
   ## And now the proxy
-  $WEAVE launch-proxy --with-dns --with-ipam
+  export WEAVEPROXY_DOCKER_ARGS="-v /var/lib/boot2docker:/var/lib/boot2docker"
+  $WEAVE launch-proxy --with-dns --tlsverify \
+  --tlscacert=/var/lib/boot2docker/ca.pem \
+  --tlscert=/var/lib/boot2docker/server.pem \
+  --tlskey=/var/lib/boot2docker/server-key.pem \
 
   ## Let's connect-up the Weave cluster by telling
   ## each of the node about the head node
@@ -47,7 +52,7 @@ for i in '1' '2' '3'; do
 
   ## Default Weave proxy port is 12375, we shall point
   ## Swarm agents at it next
-  weave_proxy_endpoint="$($DOCKER_MACHINE ip):12375"
+  weave_proxy_endpoint="$($DOCKER_MACHINE ip ${MACHINE_NAME_PREFIX}-${i}):12375"
 
   ## Now we need restart Swarm agents like this
   $DOCKER ${DOCKER_CLIENT_ARGS} rm -f swarm-agent
@@ -58,11 +63,17 @@ done
 
 ## Next we will also restart the Swarm master with the new token
 export DOCKER_CLIENT_ARGS=$($DOCKER_MACHINE config ${head_node})
+eval $($DOCKER_MACHINE env ${head_node})
 
 $DOCKER ${DOCKER_CLIENT_ARGS} rm -f swarm-agent-master
 $DOCKER ${DOCKER_CLIENT_ARGS} run -d --name=swarm-agent-master \
   -p 3376:3376 \
+  -v /var/lib/boot2docker:/var/lib/boot2docker \
   swarm manage \
+  --tlsverify \
+  --tlscacert=/var/lib/boot2docker/ca.pem \
+  --tlscert=/var/lib/boot2docker/server.pem \
+  --tlskey=/var/lib/boot2docker/server-key.pem \
   -H "tcp://0.0.0.0:3376" ${swarm_dicovery_token}
 
 ## And make sure Weave cluster setup is comple
